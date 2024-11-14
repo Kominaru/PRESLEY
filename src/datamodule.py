@@ -1,10 +1,11 @@
 import pickle
 from torch.utils.data import Dataset, DataLoader
-from torch import Tensor
+from torch import Tensor, linalg
 from pytorch_lightning import LightningDataModule
 import pandas as pd
 from numpy.random import randint
 import numpy as np
+from sklearn.metrics.pairwise import cosine_similarity
 
 
 # City-wise Datamodule, contains the image embeddings (common to all partitions)
@@ -72,7 +73,7 @@ class ImageAuthorshipDataModule(LightningDataModule):
     def val_dataloader(self):
         return DataLoader(
             self.val_dataset,
-            batch_size=self.batch_size,
+            batch_size=2**14,
             num_workers=self.num_workers,
             persistent_workers=True,
         )
@@ -80,7 +81,7 @@ class ImageAuthorshipDataModule(LightningDataModule):
     def test_dataloader(self):
         return DataLoader(
             self.test_dataset,
-            batch_size=self.batch_size,
+            batch_size=2**14,
             num_workers=self.num_workers,
             persistent_workers=True,
         )
@@ -115,6 +116,117 @@ class TripadvisorImageAuthorshipBCEDataset(Dataset):
 
         print(
             f"{self.set_type} partition ({self.partition_name}_IMG)   | {len(self.dataframe)} samples | {self.nusers} users"
+        )
+
+        if self.set_type == "train":
+
+            self.positive_samples = (
+                self.dataframe[self.dataframe[self.takeordev] == 1]
+                .sort_values(["id_user", "id_img"])
+                .drop_duplicates(keep="first")
+                .reset_index(drop=True)
+            )
+
+            self.user_centroids = Tensor(
+                np.stack(
+                    self.positive_samples.groupby("id_user")
+                    .apply(
+                        lambda x: self.datamodule.image_embeddings[
+                            x["id_img"].values
+                        ].mean(axis=0)
+                    )
+                    .values
+                )
+            )
+
+            self.p90 = Tensor(
+                self.positive_samples.groupby("id_user")
+                .apply(
+                    lambda x: np.percentile(
+                        (
+                            (
+                                self.datamodule.image_embeddings[x["id_img"].values]
+                                * self.user_centroids[x.name]
+                            ).sum(axis=1)
+                            / np.linalg.norm(
+                                self.datamodule.image_embeddings[x["id_img"].values],
+                                axis=1,
+                            )
+                            / np.linalg.norm(self.user_centroids[x.name])
+                        ),
+                        87,
+                    )
+                )
+                .values
+            )
+
+            self._resample_dataframe()
+
+    def _resample_dataframe(self):
+        user_ids = self.positive_samples["id_user"].values
+        img_ids = self.positive_samples["id_img"].values
+
+        neg_dfs = []
+
+        for _ in range(10):
+
+            rand_negs = np.random.randint(len(img_ids), size=len(img_ids))
+
+            invalid_negs = np.arange(img_ids.shape[0])
+
+            i = 0
+            max_iter = 0
+            while len(invalid_negs) > 0:
+                rand_negs[invalid_negs] = np.random.randint(
+                    len(img_ids), size=len(invalid_negs)
+                )
+                invalid_negs = np.where(user_ids == user_ids[rand_negs])[0]
+
+            neg_samples = self.positive_samples.copy()
+            neg_samples["id_img"] = img_ids[rand_negs]
+            neg_samples[self.takeordev] = 0
+
+            neg_dfs.append(neg_samples)
+
+        def obtain_samerest_samples(rest):
+            # Works the same way as the previous algorithm, but only restaurant-wise
+            user_ids = rest["id_user"].values
+            img_ids = rest["id_img"].values
+
+            rand_negs = np.random.randint(len(img_ids), size=len(img_ids))
+
+            invalid_negs = np.arange(img_ids.shape[0])
+
+            i = 0
+            max_iter = 0
+            while len(invalid_negs) > 0:
+                rand_negs[invalid_negs] = np.random.randint(
+                    len(img_ids), size=len(invalid_negs)
+                )
+                invalid_negs = np.where(user_ids == user_ids[rand_negs])[0]
+
+            rest["id_img"] = img_ids[rand_negs]
+            rest[self.takeordev] = 0
+
+            return rest
+
+        twenty_duplicates = pd.concat([self.positive_samples] * 20, ignore_index=True)
+
+        twenty_duplicates = (
+            twenty_duplicates.groupby("id_restaurant")
+            .filter(lambda g: g["id_user"].nunique() > 1)
+            .reset_index(drop=True)
+        )
+
+        twenty_duplicates = (
+            twenty_duplicates.groupby("id_restaurant", group_keys=False)
+            .apply(obtain_samerest_samples)
+            .reset_index(drop=True)
+        )
+
+        self.dataframe = pd.concat(
+            [self.positive_samples] * 40 + neg_dfs + [twenty_duplicates],
+            ignore_index=True,
         )
 
     def __len__(self):
@@ -154,27 +266,34 @@ class TripadvisorImageAuthorshipBPRDataset(TripadvisorImageAuthorshipBCEDataset)
             .reset_index(drop=True)
         )
 
-        self.user_centroids = np.stack(
-            self.positive_samples.groupby("id_user")
-            .apply(
-                lambda x: self.datamodule.image_embeddings[x["id_pos_img"].values].mean(
-                    axis=0
+        self.user_centroids = Tensor(
+            np.stack(
+                self.positive_samples.groupby("id_user")
+                .apply(
+                    lambda x: self.datamodule.image_embeddings[
+                        x["id_pos_img"].values
+                    ].mean(axis=0)
                 )
+                .values
             )
-            .values
         )
 
-        self.p90 = (
+        self.p90 = Tensor(
             self.positive_samples.groupby("id_user")
             .apply(
                 lambda x: np.percentile(
-                    np.linalg.norm(
-                        self.datamodule.image_embeddings[x["id_pos_img"].values]
-                        - self.user_centroids[x.name],
-                        axis=1,
-                        ord=2,
+                    (
+                        (
+                            self.datamodule.image_embeddings[x["id_pos_img"].values]
+                            * self.user_centroids[x.name]
+                        ).sum(axis=1)
+                        / np.linalg.norm(
+                            self.datamodule.image_embeddings[x["id_pos_img"].values],
+                            axis=1,
+                        )
+                        / np.linalg.norm(self.user_centroids[x.name])
                     ),
-                    90,
+                    10,
                 )
             )
             .values
@@ -189,7 +308,7 @@ class TripadvisorImageAuthorshipBPRDataset(TripadvisorImageAuthorshipBCEDataset)
 
         neg_ids = []
 
-        for _ in range(40):
+        for _ in range(20):
 
             rand_negs = np.random.randint(len(img_ids), size=len(img_ids))
 
@@ -201,20 +320,28 @@ class TripadvisorImageAuthorshipBPRDataset(TripadvisorImageAuthorshipBCEDataset)
                 rand_negs[invalid_negs] = np.random.randint(
                     len(img_ids), size=len(invalid_negs)
                 )
-                invalid_dist = np.where(
-                    np.linalg.norm(
-                        self.datamodule.image_embeddings[img_ids[rand_negs]]
-                        - self.user_centroids[user_ids],
-                        axis=1,
-                        ord=2,
-                    )
-                    < self.p90[user_ids]
-                )[0]
-                invalid_same = np.where(user_ids == user_ids[rand_negs])[0]
+                invalid_negs = np.where(user_ids == user_ids[rand_negs])[0]
                 if i < max_iter:
-                    invalid_negs = np.union1d(invalid_dist, invalid_same)
-                else:
-                    invalid_negs = invalid_same
+                    invalid_negs = np.union1d(
+                        invalid_negs,
+                        np.where(
+                            (
+                                (
+                                    self.datamodule.image_embeddings[img_ids[rand_negs]]
+                                    * self.user_centroids[user_ids]
+                                ).sum(axis=1)
+                                / linalg.norm(
+                                    self.datamodule.image_embeddings[
+                                        img_ids[rand_negs]
+                                    ],
+                                    axis=1,
+                                )
+                                / linalg.norm(self.user_centroids[user_ids], axis=1)
+                            )
+                            > self.p90[user_ids]
+                        )[0],
+                    )
+                print(len(invalid_negs))
                 i += 1
 
             neg_ids.append(img_ids[rand_negs])
@@ -229,46 +356,57 @@ class TripadvisorImageAuthorshipBPRDataset(TripadvisorImageAuthorshipBCEDataset)
             invalid_negs = np.arange(img_ids.shape[0])
 
             i = 0
-            while len(invalid_negs) > 0 and i < 0:
+            max_iter = 5
+            while len(invalid_negs) > 0:
                 rand_negs[invalid_negs] = np.random.randint(
                     len(img_ids), size=len(invalid_negs)
                 )
-                invalid_negs = np.where(
-                    (
-                        np.linalg.norm(
-                            self.datamodule.image_embeddings[img_ids[rand_negs]]
-                            - self.user_centroids[user_ids],
-                            axis=1,
-                            ord=2,
-                        )
-                        < self.p90[user_ids]
+                invalid_negs = np.where(user_ids == user_ids[rand_negs])[0]
+                if i < max_iter:
+                    invalid_negs = np.union1d(
+                        invalid_negs,
+                        np.where(
+                            (
+                                (
+                                    self.datamodule.image_embeddings[img_ids[rand_negs]]
+                                    * self.user_centroids[user_ids]
+                                ).sum(axis=1)
+                                / linalg.norm(
+                                    self.datamodule.image_embeddings[
+                                        img_ids[rand_negs]
+                                    ],
+                                    axis=1,
+                                )
+                                / linalg.norm(self.user_centroids[user_ids], axis=1)
+                            )
+                            > self.p90[user_ids]
+                        )[0],
                     )
-                    | (user_ids == user_ids[rand_negs])
-                )[0]
                 i += 1
+
             rest["id_neg_img"] = img_ids[rand_negs]
 
             return rest
 
-        # twenty_duplicates = pd.concat([self.positive_samples] * 20, ignore_index=True)
+        twenty_duplicates = pd.concat([self.positive_samples] * 20, ignore_index=True)
 
-        # twenty_duplicates = (
-        #     twenty_duplicates.groupby("id_restaurant")
-        #     .filter(lambda g: g["id_user"].nunique() > 1)
-        #     .reset_index(drop=True)
-        # )
+        twenty_duplicates = (
+            twenty_duplicates.groupby("id_restaurant")
+            .filter(lambda g: g["id_user"].nunique() > 1)
+            .reset_index(drop=True)
+        )
 
-        # twenty_duplicates = (
-        #     twenty_duplicates.groupby("id_restaurant", group_keys=False)
-        #     .apply(obtain_samerest_samples)
-        #     .reset_index(drop=True)
-        # )
+        twenty_duplicates = (
+            twenty_duplicates.groupby("id_restaurant", group_keys=False)
+            .apply(obtain_samerest_samples)
+            .reset_index(drop=True)
+        )
 
-        self.bpr_dataframe = pd.concat([self.positive_samples] * 40, ignore_index=True)
+        self.bpr_dataframe = pd.concat([self.positive_samples] * 20, ignore_index=True)
         self.bpr_dataframe["id_neg_img"] = np.concatenate(neg_ids)
-        # self.bpr_dataframe = pd.concat(
-        #     [self.bpr_dataframe, twenty_duplicates], ignore_index=True
-        # )
+        self.bpr_dataframe = pd.concat(
+            [self.bpr_dataframe, twenty_duplicates], ignore_index=True
+        )
 
     def __len__(self):
         return (

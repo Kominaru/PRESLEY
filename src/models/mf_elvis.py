@@ -76,6 +76,16 @@ class MF_ELVis(BaseModelForImageAuthorship):
             logger=True,
         )
 
+        self.val_recall.update(preds, targets.long(), id_tests)
+        self.log(
+            "val_recall",
+            self.val_recall,
+            on_step=False,
+            on_epoch=True,
+            prog_bar=True,
+            logger=True,
+        )
+
         self.log("val_auc", self.val_auc, on_epoch=True, logger=True, prog_bar=True)
 
         return loss

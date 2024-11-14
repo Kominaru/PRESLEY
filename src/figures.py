@@ -1,3 +1,4 @@
+import os
 import matplotlib.pyplot as plt
 from matplotlib import rcParams
 import numpy as np
@@ -64,6 +65,7 @@ def percentile_figure(data: dict):
 
     plt.title(data["city"])
     # Output
+    os.makedirs(f'figures/{data["city"]}', exist_ok=True)
     plt.savefig(
         f'figures/{data["city"]}/percentile_{data["city"]}.pdf', bbox_inches="tight"
     )
