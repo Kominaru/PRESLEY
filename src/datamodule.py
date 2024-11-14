@@ -13,18 +13,12 @@ import numpy as np
 
 
 class ImageAuthorshipDataModule(LightningDataModule):
-    def __init__(
-        self, city, batch_size, num_workers=4, dataset_class=None, use_train_val=False
-    ) -> None:
+    def __init__(self, city, batch_size, num_workers=4, dataset_class=None, use_train_val=False) -> None:
         super().__init__()
         self.city = city
         self.batch_size = batch_size
         self.num_workers = num_workers
-        self.dataset_class = (
-            TripadvisorImageAuthorshipBCEDataset
-            if dataset_class is None
-            else dataset_class
-        )
+        self.dataset_class = TripadvisorImageAuthorshipBCEDataset if dataset_class is None else dataset_class
         self.use_train_val = use_train_val
 
         self.setup()
@@ -33,33 +27,23 @@ class ImageAuthorshipDataModule(LightningDataModule):
         self.image_embeddings = Tensor(
             pickle.load(
                 open(
-                    "C:/Users/Komi/Papers/BPR/data/"
-                    + self.city
-                    + "/data_10+10/IMG_VEC",
+                    "C:/Users/Komi/Papers/PRESLEY/data/" + self.city + "/data_10+10/IMG_VEC",
                     "rb",
                 )
             )
         )
 
-        self.train_dataset = self._get_dataset(
-            "TRAIN" if not self.use_train_val else "TRAIN_DEV"
-        )
+        self.train_dataset = self._get_dataset("TRAIN" if not self.use_train_val else "TRAIN_DEV")
         self.train_val_dataset = self._get_dataset("TRAIN_DEV")
-        self.val_dataset = self._get_dataset(
-            "DEV" if not self.use_train_val else "TEST", set_type="validation"
-        )
+        self.val_dataset = self._get_dataset("DEV" if not self.use_train_val else "TEST", set_type="validation")
         self.test_dataset = self._get_dataset("TEST", set_type="test")
 
-        print(
-            f"{self.city:<10} | {self.train_dataset.nusers} users | {len(self.image_embeddings)} images"
-        )
+        print(f"{self.city:<10} | {self.train_dataset.nusers} users | {len(self.image_embeddings)} images")
 
         self.nusers = self.train_dataset.nusers
 
     def _get_dataset(self, set_name, set_type="train"):
-        return self.dataset_class(
-            datamodule=self, city=self.city, partition_name=set_name, set_type=set_type
-        )
+        return self.dataset_class(datamodule=self, city=self.city, partition_name=set_name, set_type=set_type)
 
     def train_dataloader(self):
         return DataLoader(
@@ -107,7 +91,7 @@ class TripadvisorImageAuthorshipBCEDataset(Dataset):
 
         self.dataframe = pickle.load(
             open(
-                f"C:/Users/Komi/Papers/BPR/data/{city}/data_10+10/{partition_name}_IMG",
+                f"C:/Users/Komi/Papers/PRESLEY/data/{city}/data_10+10/{partition_name}_IMG",
                 "rb",
             )
         )
@@ -172,29 +156,16 @@ class TripadvisorImageAuthorshipBPRDataset(TripadvisorImageAuthorshipBCEDataset)
         new_negatives = randint(num_samples, size=num_samples)
 
         # Count how many would have the same user in the neg_img and the pos_img
-        num_invalid_samples = np.sum(
-            (
-                (user_ids[new_negatives] == user_ids)
-                | (rest_ids[new_negatives] == rest_ids)
-            )
-        )
+        num_invalid_samples = np.sum(((user_ids[new_negatives] == user_ids) | (rest_ids[new_negatives] == rest_ids)))
         while num_invalid_samples > 0:
             # Resample again the neg images for those samples, until all are valid,
             # meaning that user(pos_img(sample)) =/= user(neg_img(sample))
             new_negatives[
-                np.where(
-                    (
-                        (user_ids[new_negatives] == user_ids)
-                        | (rest_ids[new_negatives] == rest_ids)
-                    )
-                )[0]
+                np.where(((user_ids[new_negatives] == user_ids) | (rest_ids[new_negatives] == rest_ids)))[0]
             ] = randint(num_samples, size=num_invalid_samples)
 
             num_invalid_samples = np.sum(
-                (
-                    (user_ids[new_negatives] == user_ids)
-                    | (rest_ids[new_negatives] == rest_ids)
-                )
+                ((user_ids[new_negatives] == user_ids) | (rest_ids[new_negatives] == rest_ids))
             )
 
         # Assign as new neg imgs the img_ids of the selected neg_imgs
@@ -209,9 +180,9 @@ class TripadvisorImageAuthorshipBPRDataset(TripadvisorImageAuthorshipBCEDataset)
             new_negatives = randint(len(rest), size=len(rest))
             num_invalid_samples = np.sum(user_ids[new_negatives] == user_ids)
             while num_invalid_samples > 0:
-                new_negatives[
-                    np.where(user_ids[new_negatives] == user_ids)[0]
-                ] = randint(len(rest), size=num_invalid_samples)
+                new_negatives[np.where(user_ids[new_negatives] == user_ids)[0]] = randint(
+                    len(rest), size=num_invalid_samples
+                )
 
                 num_invalid_samples = np.sum(user_ids[new_negatives] == user_ids)
             rest["id_neg_img"] = img_ids[new_negatives]
@@ -231,14 +202,10 @@ class TripadvisorImageAuthorshipBPRDataset(TripadvisorImageAuthorshipBCEDataset)
             .reset_index(drop=True)
         )
 
-        self.bpr_dataframe = pd.concat(
-            [different_res_bpr_samples, same_res_bpr_samples], axis=0, ignore_index=True
-        )
+        self.bpr_dataframe = pd.concat([different_res_bpr_samples, same_res_bpr_samples], axis=0, ignore_index=True)
 
     def __len__(self):
-        return (
-            len(self.bpr_dataframe) if self.set_type == "train" else len(self.dataframe)
-        )
+        return len(self.bpr_dataframe) if self.set_type == "train" else len(self.dataframe)
 
     def __getitem__(self, idx):
         # If on training, return BPR samples
@@ -291,15 +258,11 @@ class TripadvisorImageAuthorshipCLDataset(TripadvisorImageAuthorshipBCEDataset):
     def _setup_contrastive_learning_samples(self):
         # Filter only positive samples for Contrastive Learning
         self.pos_dataframe = (
-            self.dataframe[self.dataframe[self.takeordev] == 1]
-            .drop_duplicates(keep="first")
-            .reset_index(drop=True)
+            self.dataframe[self.dataframe[self.takeordev] == 1].drop_duplicates(keep="first").reset_index(drop=True)
         )
 
     def __len__(self):
-        return (
-            len(self.pos_dataframe) if self.set_type == "train" else len(self.dataframe)
-        )
+        return len(self.pos_dataframe) if self.set_type == "train" else len(self.dataframe)
 
     def __getitem__(self, idx):
         # If on training or validation, return CL samples
@@ -355,7 +318,7 @@ class TripadvisorImageAuthorshipISLEDataset(TripadvisorImageAuthorshipBCEDataset
 
         self._resample_dataframe()
         self._create_sets()
-    
+
     def _create_sets(self):
         # Generates a n_users, numimages matrix with the images ids of each user
 
@@ -367,27 +330,21 @@ class TripadvisorImageAuthorshipISLEDataset(TripadvisorImageAuthorshipBCEDataset
             ]
         )
 
-        poisitive_aux = self.positive_samples.copy().drop_duplicates(
-            subset=["id_user", "id_pos_img"], keep="first"
-        )
-
-        max_images = poisitive_aux.groupby("id_user").size().max()
-
         if self.set_type == "train":
-            self.sets = np.zeros((self.nusers, max_images), dtype=int)-1
-        else:
-            self.sets = np.zeros((self.datamodule.train_dataset.nusers, max_images), dtype=int)-1
+            positive_aux = self.positive_samples.copy().drop_duplicates(subset=["id_user", "id_pos_img"], keep="first")
+            max_images = positive_aux.groupby("id_user").size().max()
+            self.sets = np.zeros((self.nusers, max_images), dtype=int) - 1
 
-        for user_id, usergroup in poisitive_aux.groupby("id_user"):
-            self.sets[user_id, : len(usergroup)] = usergroup["id_pos_img"].to_numpy()
-    
+            for user_id, usergroup in positive_aux.groupby("id_user"):
+                self.sets[user_id, : len(usergroup)] = usergroup["id_pos_img"].to_numpy()
+
     def _shuffle_sets(self):
         # Shuffle the non--1 values of each row
-        self.sets+=1
+        self.sets = self.sets + 1
         i, j = np.nonzero(self.sets.astype(bool))
         k = np.argsort(i + np.random.rand(i.size))
-        self.sets[i,j] = self.sets[i,j[k]]
-        self.sets-=1
+        self.sets[i, j] = self.sets[i, j[k]]
+        self.sets = self.sets - 1
 
     def _resample_dataframe(self):
         num_samples = len(self.positive_samples)
@@ -404,29 +361,16 @@ class TripadvisorImageAuthorshipISLEDataset(TripadvisorImageAuthorshipBCEDataset
         new_negatives = randint(num_samples, size=num_samples)
 
         # Count how many would have the same user in the neg_img and the pos_img
-        num_invalid_samples = np.sum(
-            (
-                (user_ids[new_negatives] == user_ids)
-                | (rest_ids[new_negatives] == rest_ids)
-            )
-        )
+        num_invalid_samples = np.sum(((user_ids[new_negatives] == user_ids) | (rest_ids[new_negatives] == rest_ids)))
         while num_invalid_samples > 0:
             # Resample again the neg images for those samples, until all are valid,
             # meaning that user(pos_img(sample)) =/= user(neg_img(sample))
             new_negatives[
-                np.where(
-                    (
-                        (user_ids[new_negatives] == user_ids)
-                        | (rest_ids[new_negatives] == rest_ids)
-                    )
-                )[0]
+                np.where(((user_ids[new_negatives] == user_ids) | (rest_ids[new_negatives] == rest_ids)))[0]
             ] = randint(num_samples, size=num_invalid_samples)
 
             num_invalid_samples = np.sum(
-                (
-                    (user_ids[new_negatives] == user_ids)
-                    | (rest_ids[new_negatives] == rest_ids)
-                )
+                ((user_ids[new_negatives] == user_ids) | (rest_ids[new_negatives] == rest_ids))
             )
 
         # Assign as new neg imgs the img_ids of the selected neg_imgs
@@ -441,9 +385,9 @@ class TripadvisorImageAuthorshipISLEDataset(TripadvisorImageAuthorshipBCEDataset
             new_negatives = randint(len(rest), size=len(rest))
             num_invalid_samples = np.sum(user_ids[new_negatives] == user_ids)
             while num_invalid_samples > 0:
-                new_negatives[
-                    np.where(user_ids[new_negatives] == user_ids)[0]
-                ] = randint(len(rest), size=num_invalid_samples)
+                new_negatives[np.where(user_ids[new_negatives] == user_ids)[0]] = randint(
+                    len(rest), size=num_invalid_samples
+                )
 
                 num_invalid_samples = np.sum(user_ids[new_negatives] == user_ids)
             rest["id_neg_img"] = img_ids[new_negatives]
@@ -463,22 +407,18 @@ class TripadvisorImageAuthorshipISLEDataset(TripadvisorImageAuthorshipBCEDataset
             .reset_index(drop=True)
         )
 
-        self.bpr_dataframe = pd.concat(
-            [different_res_bpr_samples, same_res_bpr_samples], axis=0, ignore_index=True
-        )
+        self.bpr_dataframe = pd.concat([different_res_bpr_samples, same_res_bpr_samples], axis=0, ignore_index=True)
 
     def __len__(self):
-        return (
-            len(self.bpr_dataframe) if self.set_type == "train" else len(self.dataframe)
-        )
+        return len(self.bpr_dataframe) if self.set_type == "train" else len(self.dataframe)
 
     def __getitem__(self, idx):
         # If on training, return BPR samples
         # (user, pos_image, neg_image)
         if self.set_type == "train":
             user_id = self.bpr_dataframe.at[idx, "id_user"]
-            user_images = self.sets[user_id,:8]
-            mask = np.expand_dims(user_images!=-1, axis=1)
+            user_images = self.sets[user_id, :8]
+            mask = np.expand_dims(user_images != -1, axis=1)
             user_images = self.datamodule.image_embeddings[user_images]
             pos_image_id = self.bpr_dataframe.at[idx, "id_pos_img"]
             neg_image_id = self.bpr_dataframe.at[idx, "id_neg_img"]
@@ -492,10 +432,9 @@ class TripadvisorImageAuthorshipISLEDataset(TripadvisorImageAuthorshipBCEDataset
         # The test_id is needed to compute the validation recall or AUC
         # inside the LightningModule
         elif self.set_type == "validation":
-
             user_id = self.dataframe.at[idx, "id_user"]
-            user_images = self.datamodule.train_dataset.sets[user_id,:8]
-            mask = np.expand_dims(user_images!=-1, axis=1)
+            user_images = self.datamodule.train_val_dataset.sets[user_id, :8]
+            mask = np.expand_dims(user_images != -1, axis=1)
             user_images = self.datamodule.image_embeddings[user_images]
 
             image_id = self.dataframe.at[idx, "id_img"]
@@ -510,13 +449,13 @@ class TripadvisorImageAuthorshipISLEDataset(TripadvisorImageAuthorshipBCEDataset
         # (id_user, image, label)
         elif self.set_type == "test":
             user_id = self.dataframe.at[idx, "id_user"]
-            user_images = self.datamodule.train_dataset.sets[user_id,:64]
-            mask = np.expand_dims(user_images!=-1, axis=1)
+            user_images = self.datamodule.train_val_dataset.sets[user_id, :64]
+            mask = np.expand_dims(user_images != -1, axis=1)
             user_images = self.datamodule.image_embeddings[user_images]
 
             image_id = self.dataframe.at[idx, "id_img"]
             image = self.datamodule.image_embeddings[image_id]
-            
+
             target = float(self.dataframe.at[idx, self.takeordev])
 
             return user_images, mask, image, target

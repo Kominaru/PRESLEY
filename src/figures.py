@@ -1,3 +1,4 @@
+import os
 import matplotlib.pyplot as plt
 from matplotlib import rcParams
 import numpy as np
@@ -8,6 +9,10 @@ PLOT_COLORS = {
     "MF_ELVis": "b",
     "RANDOM": "y",
     "CNT": "purple",
+    "ISLE": "orange",
+    "CNT_LATENT": "lightblue",
+    "SIM_LATENT": "lightgreen",
+    "SIM_INCEPTION": "teal",
 }
 
 
@@ -21,10 +26,8 @@ def percentile_figure(data: dict):
         plt.plot(
             metrics["min_photos"],
             metrics["median_percentile"],
-            linewidth=3.0,
-            label=metrics["model_name"]
-            if metrics["model_name"] != "PRESLEY"
-            else "BRIE",
+            linewidth=1.5,
+            label=metrics["model_name"] if metrics["model_name"] != "PRESLEY" else "BRIE",
             alpha=0.8,
             color=PLOT_COLORS[metrics["model_name"]],
         )
@@ -64,9 +67,9 @@ def percentile_figure(data: dict):
 
     plt.title(data["city"])
     # Output
-    plt.savefig(
-        f'figures/{data["city"]}/percentile_{data["city"]}.pdf', bbox_inches="tight"
-    )
+
+    os.makedirs(f'figures/{data["city"]}', exist_ok=True)
+    plt.savefig(f'figures/{data["city"]}/percentile_{data["city"]}.pdf', bbox_inches="tight")
     # plt.show()
 
 
@@ -98,5 +101,6 @@ def retrieval_figure(data: dict, metric_name: str):
     plt.tight_layout()
 
     # Output
+    os.makedirs(f'figures/{data["city"]}', exist_ok=True)
     plt.savefig(f'docs/{data["city"]}/{metric_name}.pdf', bbox_inches="tight")
     plt.show()

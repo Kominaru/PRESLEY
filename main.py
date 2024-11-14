@@ -11,7 +11,7 @@ from ray.tune.integration.pytorch_lightning import TuneReportCallback
 from ray import tune
 from ray.tune import CLIReporter
 import pickle
-from src.centroids import get_centroid_preds
+from src.centroids import get_centroid_preds, get_centroid_preds_latent, get_inception_sim, get_isle_preds
 
 args = read_args()
 
@@ -22,11 +22,9 @@ if __name__ == "__main__":
     print("=" * 50)
     print(f"============= {city} ===========")
 
-    val_metric_name = (
-        "val_loss" if args.model[0] not in ["PRESLEY", "COLLEI", "ISLE"] else "val_auc"
-    )
+    val_metric_name = "val_loss" if args.model[0] not in ["PRESLEY", "COLLEI", "ISLE", "DIEDUE"] else "val_auc"
 
-    val_metric_mode = "min" if args.model[0] not in ["PRESLEY", "COLLEI", "ISLE"] else "max"
+    val_metric_mode = "min" if args.model[0] not in ["PRESLEY", "COLLEI", "ISLE", "DIEDUE"] else "max"
 
     # Initialize datamodule
     dm = ImageAuthorshipDataModule(
@@ -51,7 +49,7 @@ if __name__ == "__main__":
             monitor=val_metric_name,
             mode=val_metric_mode,
             min_delta=1e-4,
-            patience=10,
+            patience=5,
             check_on_train_epoch_end=False,
         )
 
@@ -110,9 +108,9 @@ if __name__ == "__main__":
 
         # Search space
         config = {
-            "lr": 1e-3,
-            "d": tune.choice([64, 128, 256, 512, 1024]),
-            "dropout": tune.choice([0.5, 0.6, 0.7, 0.8, 0.9]),
+            "lr": tune.choice([1e-3, 5e-4, 1e-4, 5e-5]),
+            "d": tune.choice([8, 16, 32, 64]),
+            "dropout": tune.choice([0.0, 0.2, 0.4, 0.6, 0.8]),
         }
 
         # Report callback
@@ -132,12 +130,7 @@ if __name__ == "__main__":
         def train_config(config, datamodule=None):
             logger = pl.loggers.CSVLogger(
                 name=city + "_tune/" + args.model[0],
-                version="d_"
-                + str(config["d"])
-                + "_lr_"
-                + str(config["lr"])
-                + "_dropout_"
-                + str(config["dropout"]),
+                version="d_" + str(config["d"]) + "_lr_" + str(config["lr"]) + "_dropout_" + str(config["dropout"]),
                 save_dir="C:/Users/Komi/Papers/PRESLEY/csv_logs",
             )
 
@@ -168,12 +161,8 @@ if __name__ == "__main__":
         )
 
         # Find best configuration and its best val metric value
-        best_config = analysis.get_best_config(
-            metric=val_metric_name, scope="all", mode=val_metric_mode
-        )
-        best_val_loss = analysis.dataframe(
-            metric=val_metric_name, mode=val_metric_mode
-        )[val_metric_name].max()
+        best_config = analysis.get_best_config(metric=val_metric_name, scope="all", mode=val_metric_mode)
+        best_val_loss = analysis.dataframe(metric=val_metric_name, mode=val_metric_mode)[val_metric_name].max()
 
         print(f"Best {val_metric_name}: {best_val_loss} ({best_config}) ")
 
@@ -186,27 +175,61 @@ if __name__ == "__main__":
 
         # Obtain predictions of each trained model
         for model_name in args.model:
-            if not args.load_preds or model_name in ["PRESLEY"]:
-                model = utils.get_model(
-                    model_name, vars(args), dm.nusers
-                ).load_from_checkpoint(f"models/{city}/{model_name}/{filename}.ckpt")
-
-                test_preds = torch.cat(
-                    trainer.predict(model=model, dataloaders=dm.test_dataloader())
+            if model_name in "ISLE":
+                dm = ImageAuthorshipDataModule(
+                    city=city,
+                    batch_size=args.batch_size,
+                    num_workers=workers,
+                    dataset_class=utils.get_dataset_constructor(model_name),
+                    use_train_val=args.use_train_val,
                 )
 
+                model = utils.get_model(model_name, vars(args), dm.nusers).load_from_checkpoint(
+                    f"models/{city}/{model_name}/{filename}.ckpt"
+                )
+
+                weights = model.embedding_block.weight.data.cpu().numpy()
+                biases = model.embedding_block.bias.data.cpu().numpy()
+
+                test_preds = get_isle_preds(dm, weights, biases)
+                models_preds[model_name] = test_preds
+                continue
+
+            if not args.load_preds or model_name in ["PRESLEY"]:
+                dm = ImageAuthorshipDataModule(
+                    city=city,
+                    batch_size=args.batch_size,
+                    num_workers=workers,
+                    dataset_class=utils.get_dataset_constructor(model_name),
+                    use_train_val=args.use_train_val,
+                )
+
+                model = utils.get_model(model_name, vars(args), dm.nusers).load_from_checkpoint(
+                    f"models/{city}/{model_name}/{filename}.ckpt"
+                )
+
+                test_preds = torch.cat(trainer.predict(model=model, dataloaders=dm.test_dataloader()))
+
             else:
-                test_preds = pickle.load(open(f"preds/{city}_{model_name}", "rb"))[
-                    "prediction"
-                ].values
+                test_preds = pickle.load(open(f"preds/{city}_{model_name}", "rb"))["prediction"].values
 
             models_preds[model_name] = test_preds
 
         # Obtain random predictions for baseline comparison
-        models_preds["RANDOM"] = torch.mean(
-            torch.rand((len(dm.test_dataset), 10)), dim=1
-        )
+        models_preds["RANDOM"] = torch.mean(torch.rand((len(dm.test_dataset), 10)), dim=1)
 
-        models_preds["CNT"] = get_centroid_preds(dm)
+        # models_preds["CNT"] = get_centroid_preds(dm)
+
+        # model = utils.get_model("PRESLEY", vars(args), dm.nusers).load_from_checkpoint(
+        #     f"models/barcelona/PRESLEY/{filename}.ckpt"
+        # )
+        # models_preds["CNT_LATENT"] = get_centroid_preds_latent(dm, model)
+        # models_preds["SIM_LATENT"] = get_isle_preds(
+        #     dm,
+        #     model.embedding_block.img_fc.weight.data.cpu().numpy(),
+        #     model.embedding_block.img_fc.bias.data.cpu().numpy(),
+        # )
+
+        # models_preds["SIM_INCEPTION"] = get_inception_sim(dm)
 
         test_tripadvisor_authorship_task(dm, models_preds, args)

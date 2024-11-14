@@ -18,7 +18,7 @@ def read_args():
 
     parser.add_argument("--lr", type=float, default=1e-3)  # learning rate
     # number of latent factors
-    parser.add_argument("-d", type=int, default=256)
+    parser.add_argument("--d", "-d", type=int, default=256)
     # only do train, no validation
     parser.add_argument("--no_validation", action=BooleanOptionalAction)
 

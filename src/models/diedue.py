@@ -8,7 +8,7 @@ from src.models.mf_elvis import MF_ELVis
 from torch.nn import Dropout
 
 
-class ISLE(MF_ELVis):
+class DIEDUE(MF_ELVis):
     def __init__(self, d: int, lr: float, dropout: float = 0.5):
         """
         BPR (Bayesian Pairwise Ranking) loss based Matrix Factorisation model for image autorship
@@ -38,7 +38,8 @@ class ISLE(MF_ELVis):
     def training_step(self, batch, batch_idx):
         users, masks, pos_images, neg_images = batch
 
-        pos_preds, neg_preds = self._forward_posneg((users, masks, pos_images, neg_images), output_logits=True)
+        pos_preds = self((users, masks, pos_images), output_logits=True)
+        neg_preds = self((users, masks, neg_images), output_logits=True)
 
         loss = bpr_loss(pos_preds, neg_preds)
 
@@ -66,48 +67,28 @@ class ISLE(MF_ELVis):
         users, mask, images = x
 
         users = self.embedding_block(users)
-        users = self.user_dropout(users)
-        users = users * mask
-        users = torch.sum(users, dim=1)
-        users = users / torch.sum(mask, dim=1)
-
         images = self.embedding_block(images)
+
+        # Perform dot product attention: Q is the image embedding, K is the user embeddings (transposed) and V is the user embeddings
+        # QK^T = (1 x d) x (d x |Pu|) = (1 x |Pu|) -> How relevant is the image for each image of the user
+        # QK^TV = (1 x |Pu|) x (|Pu| x d) = (1 x d) -> Weighted sum of the user's image embeddings
+
+        users = self.user_dropout(users)
         images = self.image_dropout(images)
 
+        mask = mask.bool().transpose(1, 2)
+        images = images.unsqueeze(1)
+
+        users = torch.nn.functional.scaled_dot_product_attention(images, users, users, attn_mask=mask)
+
         # Using dim=-1 to support forward of batches and single samples
-        preds = torch.sum(users * images, dim=-1)
+        preds = torch.sum(users.squeeze(1) * images.squeeze(1), dim=-1)
 
         if output_logits:
             return preds
         else:
             preds = torch.sigmoid(preds)
             return preds
-
-    def _forward_posneg(self, x, output_logits=False):
-        users, mask, pos_images, neg_images = x
-
-        users = self.embedding_block(users)
-        users = self.user_dropout(users)
-        users = users * mask
-        users = torch.sum(users, dim=1)
-        users = users / torch.sum(mask, dim=1)
-
-        pos_images = self.embedding_block(pos_images)
-        pos_images = self.image_dropout(pos_images)
-
-        neg_images = self.embedding_block(neg_images)
-        neg_images = self.image_dropout(neg_images)
-
-        # Using dim=-1 to support forward of batches and single samples
-        pos_preds = torch.sum(users * pos_images, dim=-1)
-        neg_preds = torch.sum(users * neg_images, dim=-1)
-
-        if output_logits:
-            return pos_preds, neg_preds
-        else:
-            pos_preds = torch.sigmoid(pos_preds)
-            neg_preds = torch.sigmoid(neg_preds)
-            return pos_preds, neg_preds
 
     def on_train_epoch_start(self) -> None:
         # Between epochs, resample the negative images of each (user, pos_img, neg_img)
